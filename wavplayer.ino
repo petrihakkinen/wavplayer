@@ -7,7 +7,9 @@
 #include <SPI.h>
 #include <SD.h>
 
-#define BUFFER_SIZE	512
+//#define FILENAME	"credits.raw"
+#define FILENAME	"sine.raw"
+#define BUFFER_SIZE	1024
 
 File myFile;
 
@@ -17,7 +19,7 @@ volatile uint16_t sample_pos = 0;
 ISR(TIMER0_COMPA_vect) // called at 16 KHz
 {
 	OCR2B = sample[sample_pos] + 128;
-	sample_pos++; // = (sample_pos + 1) & (BUFFER_SIZE-1);
+	sample_pos++;
 }
 
 void playAudio()
@@ -61,78 +63,47 @@ void playAudio()
 	asm("sei");
 }
 
-/*
-void loadSample()
+void setSckRate(uint8_t sckRateID)
 {
-	// Open serial communications and wait for port to open:
-	Serial.begin(9600);
-	while(!Serial)
-	{
-		// wait for serial port to connect. Needed for native USB port only
-	}
-
-	if(!SD.begin(4))
-	{
-		Serial.println("initialization failed!");
-		return;
-	}
-	Serial.println("initialization done.");
-
-	Serial.println("Open file...");
-	myFile = SD.open("wizard.raw");
-	if(!myFile)
-	{
-		// if the file didn't open, print an error:
-		Serial.println("error opening wizard.raw");
-		return;
-	}
-
-	Serial.println("Loading sample...");
-	for(int i = 0; i < BUFFER_SIZE; i++)
-		sample[i] = myFile.read();
-
-	//myFile.close();	
-}
-*/
-
-void testSD()
-{
-	static uint32_t p = 0;
-	p++;
-	if(p < 100000)
-		return;
-	p = 0;
-
-	Serial.println("Testing sd card...");
-	myFile = SD.open("test.txt");
-	if(myFile)
-	{
-		while(myFile.available())
-		{
-			Serial.write(myFile.read());
-		}
-	}
-	myFile.close();
-
+	// see avr processor datasheet for SPI register bit definitions
+	if ((sckRateID & 1) || sckRateID == 6)
+		SPSR &= ~(1 << SPI2X);
+	else
+		SPSR |= (1 << SPI2X);
+	SPCR &= ~((1 <<SPR1) | (1 << SPR0));
+	SPCR |= (sckRateID & 4 ? (1 << SPR1) : 0) | (sckRateID & 2 ? (1 << SPR0) : 0);
 }
 
 void setup()
 {
+	// TODO: arduino sd library runs at half spi speed, use sdfat library directly to get full speed!
+	SD.begin(4);
+
+	myFile = SD.open(FILENAME);
+
+	// initial fill buffer
+	for(int i = 0; i < BUFFER_SIZE; i++)
+		sample[i] = myFile.read();
+
+	// start playback
 	playAudio();
 
-	Serial.begin(9600);
-	SD.begin(4);
-	myFile = SD.open("wizard.raw");
+	setSckRate(0);	// full rate SPI
 
 	while(true)
 	{
-		// fill buffer
-		for(int i = 0; i < BUFFER_SIZE; i++)
-			sample[i] = myFile.read();
+		// wait until first half consumed
+		while(sample_pos < BUFFER_SIZE/2) {}
 
-		// wait until buffer consumed
+		// load data
+		myFile.read((void*)&sample[0], BUFFER_SIZE/2);
+
+		// wait until second half consumed
 		while(sample_pos < BUFFER_SIZE) {}
 		sample_pos = 0;
+
+		// load data
+		myFile.read((void*)&sample[BUFFER_SIZE/2], BUFFER_SIZE/2);
 	}
 }
 
