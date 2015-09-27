@@ -11,8 +11,8 @@
 
 File myFile;
 
-uint8_t sample[BUFFER_SIZE];
-uint16_t sample_pos = 0;
+volatile uint8_t sample[BUFFER_SIZE];
+volatile uint16_t sample_pos = 0;
 
 ISR(TIMER0_COMPA_vect) // called at 16 KHz
 {
@@ -35,8 +35,6 @@ void playAudio()
 	//DDRC = 0x12; 
 	//DDRD = 0xff;
 	pinMode(3, OUTPUT);
-
-	// *** FIXME: setting any timer register messes up sd card library! ***
 
 	// this configures Timer/Counter0 to cause interrupts at 16 KHz
 	// 16000000 Hz / 8 / 125 = 16000 Hz
@@ -99,43 +97,46 @@ void loadSample()
 
 void testSD()
 {
+	static uint32_t p = 0;
+	p++;
+	if(p < 100000)
+		return;
+	p = 0;
+
+	Serial.println("Testing sd card...");
 	myFile = SD.open("test.txt");
 	if(myFile)
 	{
-		Serial.println("test.txt:");
 		while(myFile.available())
 		{
 			Serial.write(myFile.read());
 		}
 	}
 	myFile.close();
+
 }
 
 void setup()
 {
+	playAudio();
+
 	Serial.begin(9600);
 	SD.begin(4);
-	//myFile = SD.open("wizard.raw");
+	myFile = SD.open("wizard.raw");
 
-	// while(true)
-	// {
-	// 	// fill buffer
-	// 	for(int i = 0; i < BUFFER_SIZE; i++)
-	// 		sample[i] = myFile.read();
+	while(true)
+	{
+		// fill buffer
+		for(int i = 0; i < BUFFER_SIZE; i++)
+			sample[i] = myFile.read();
 
-	// 	// wait until buffer consumed
-	// 	while(sample_pos < BUFFER_SIZE) {}
-	// 	sample_pos = 0;
-	// }
+		// wait until buffer consumed
+		while(sample_pos < BUFFER_SIZE) {}
+		sample_pos = 0;
+	}
 }
 
 void loop()
 {
-	delay(1000);
-	testSD();
-
-	static int count = 0;
-	count++;
-	if(count == 3)
-		playAudio();	// messes up SD card library!
+	// nothing
 }
