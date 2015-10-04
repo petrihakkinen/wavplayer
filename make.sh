@@ -1,3 +1,3 @@
 #!/bin/sh
 
-cc -o music_converter music_converter.cpp
+cc -Wall -o music_converter music_converter.cpp

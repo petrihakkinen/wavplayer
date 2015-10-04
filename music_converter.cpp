@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <stdint.h>
+#include <algorithm>
 #include "stb_vorbis.c"
 
 #define MAKE_ID( a, b, c, d )	(((a))|((b)<<8)|((c)<<16)|(d<<24))
@@ -120,6 +121,24 @@ void writeWAV(const char* filename, float* data, int samples, int sample_rate)
 	fwrite(data, 1, samples * 4, fp);
 
 	fclose(fp);
+}
+
+float* resample(const float* data, int samples, float input_frequency, float output_frequency, int* out_samples)
+{
+	int new_samples = (int)(samples * output_frequency / input_frequency + 0.5f);
+	float* new_data = (float*)malloc(new_samples * 4);
+
+	for(int i = 0; i < new_samples; i++)
+	{
+		float t = i * (input_frequency / output_frequency);
+		float z0 = data[std::min((int)t, samples-1)];
+		float z1 = data[std::min((int)t+1, samples-1)];
+		t = t - (int)t;
+		new_data[i] = z0 * (1.0f - t) + z1 * t;		
+	}
+
+	*out_samples = new_samples;
+	return new_data;
 }
 
 /*
@@ -242,10 +261,14 @@ int main(int argc, const char** argv)
 	int sample_rate = 0;
 	float* data = loadOGG(input_filename, &samples, &sample_rate);
 
-	// TODO: resample to 31250hz
+	// resample to 31250hz
+	int new_samples = 0;
+	data = resample(data, samples, sample_rate, 31250.0f, &new_samples);
+	samples = new_samples;
+	sample_rate = 31250.0f;
 
 	// run low-pass filter
-	lowPassFilterBQR(data, samples, frequency, 48000.0f, resonance);
+	lowPassFilterBQR(data, samples, frequency, sample_rate, resonance);
 
 	// save result
 	//writeRAW(output_filename, data, samples);
