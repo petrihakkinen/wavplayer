@@ -1,4 +1,4 @@
-// Pin 3    Audio out (PWM)
+// PD0-PD7  8-bit audio out
 // Pin 10   SD Card CS
 // Pin 11   SD Card MOSI
 // Pin 12   SD Card MISO
@@ -7,9 +7,6 @@
 #include <SPI.h>
 #include <SD.h>
 
-#define FILENAME	"credits.raw"
-#define FILENAME	"theme.raw"
-//#define FILENAME	"sine.raw"
 #define BUFFER_SIZE	512
 
 //#define TEST_SINE
@@ -18,53 +15,20 @@ File myFile;
 
 volatile uint8_t sample[BUFFER_SIZE];
 volatile uint16_t sample_pos = 0;
+uint16_t led = 0;
 
 ISR(TIMER0_COMPA_vect) // called at 31250 Hz
 {
-	PORTD = sample[sample_pos];
+	uint8_t s = sample[sample_pos];
+	PORTD = s;
 	sample_pos++;
-}
 
-void playAudio()
-{
-	// global interrupt disable
-	asm("cli");
-
-	// set CPU clock prescaler to 1
-	// isn't this the default setting?
-	//CLKPR = 0x80;
-	//CLKPR = 0x80;
-
-	// DDRx Data Direction Register for Port x where x = C,D
-	// each bit sets output mode for a pin
-	//DDRC = 0x12; 
-	DDRD = 0xff;
-	//pinMode(3, OUTPUT);
-
-	// this configures Timer/Counter0 to cause interrupts at 16 KHz
-	// 16000000 Hz / 8 / 125 = 16000 Hz
-	// 16000000 Hz / 8 / 64 = 31250 Hz
-	TCCR0A = 2;  // set Clear Timer on Compare Match (CTC) mode
-	TCCR0B = 2;  // set Timer/Counter clock prescaler to 1/8
-	OCR0A = 64; // set Output Compare Register for Timer/Counter0 Comparator A
-
-	// Enable Fast PWM
-	// ===============
-	// Timer/Counter2 Control Register A
-	// bits 7-6: Clear OC2A on Compare Match, set OC2A at BOTTOM (non-inverting mode)
-	// bits 5-4: Clear OC2B on Compare Match, set OC2B at BOTTOM (non-inverting mode)
-	// bits 1-0: enable Fast PWM
-	//TCCR2A = 0b10100011;
-	// Timer/Counter2 Control Register A
-	// bits 2-0: No prescaling (full clock rate)
-	//TCCR2B = 0b00000001;
-
-	// enables interrupt on Timer0
-	// enable Timer/Counter0 Compare Match A interrupt
-	TIMSK0 = 2;
-
-	// global interrupt enable
-	asm("sei");
+	// flash led
+	if((uint16_t)(s * s) > 40000)
+		led = 65520;
+	PORTC = (led>>6) > sample_pos;
+	if(led > 0)
+		led -= 16;
 }
 
 void setSckRate(uint8_t sckRateID)
@@ -80,47 +44,115 @@ void setSckRate(uint8_t sckRateID)
 
 void setup()
 {
-	// TODO: arduino sd library runs at half spi speed, use sdfat library directly to get full speed!
+	DDRB = 0;		// set PB0 to input pull mode
+	PORTB = 1;	
+
+	DDRC = 1;
+
+	DDRD = 0xff;
+
 	SD.begin(10);
-	myFile = SD.open(FILENAME);
 
-	// initial fill buffer
-	myFile.read((void*)&sample[0], BUFFER_SIZE);
+	int song = 0;
 
-	// start playback
-	playAudio();
+	// global interrupt disable
+	asm("cli");
 
-	// test sine wave
-#ifdef TEST_SINE
-	for(int i = 0; i < BUFFER_SIZE; i++)
-		sample[i] = (uint8_t)(sin(i * M_PI * 2.0f * 16.0f / BUFFER_SIZE) * 120.0f);
-	while(true) {}
-#endif
+	// this configures Timer/Counter0 to cause interrupts at 16 KHz
+	// 16000000 Hz / 8 / 125 = 16000 Hz
+	// 16000000 Hz / 8 / 64 = 31250 Hz
+	// 16000000 Hz / 8 / 50 = 40000 Hz
+	TCCR0A = 2;  // set Clear Timer on Compare Match (CTC) mode
+	TCCR0B = 2;  // set Timer/Counter clock prescaler to 1/8
+	OCR0A = 50; // set Output Compare Register for Timer/Counter0 Comparator A
 
-	setSckRate(0);	// full rate SPI
+	// enable/disable Timer/Counter0 Compare Match A interrupt
+	TIMSK0 = 0;
+
+	// global interrupt enable
+	asm("sei");
 
 	while(true)
 	{
-		// wait until first half consumed
-		while(sample_pos < BUFFER_SIZE/2) {}
+		// next filename
+		char filename[16];
+		while(true)
+		{
+			sprintf(filename, "tune%d.raw", song + 1);
+			if(SD.exists(filename))
+				break;
+			song = 0;
+		}
 
-		// load data
-		myFile.read((void*)&sample[0], BUFFER_SIZE/2);
+		// open file
+		myFile = SD.open(filename);
 
-		// led on if took too look
-		//if(sample_pos > 1023)
-		//	PORTD |= 16;
+		// initial fill buffer
+		myFile.read((void*)&sample[0], BUFFER_SIZE);
 
-		// wait until second half consumed
-		while(sample_pos < BUFFER_SIZE) {}
-		sample_pos = 0;
+		// test sine wave
+#ifdef TEST_SINE
+		for(int i = 0; i < BUFFER_SIZE; i++)
+			sample[i] = (uint8_t)(sin(i * M_PI * 2.0f * 16.0f / BUFFER_SIZE) * 120.0f);
+		while(true) {}
+#endif
 
-		// load data
-		myFile.read((void*)&sample[BUFFER_SIZE/2], BUFFER_SIZE/2);
+		// full rate SPI
+		setSckRate(0);
 
-		// led on if took too look
-		//if(sample_pos > 511)
-		//	PORTD |= 16;
+		TIMSK0 = 2;	// enable audio interrupt
+
+		uint8_t prev_button = 0;
+
+		while(myFile.available() > 0)
+		{
+			// wait until first half consumed
+			while(sample_pos < BUFFER_SIZE/2) {}
+
+			// load data
+			myFile.read((void*)&sample[0], BUFFER_SIZE/2);
+
+			// led on if took too look
+			//if(sample_pos > 1023)
+			//	PORTD |= 16;
+
+			// wait until second half consumed
+			while(sample_pos < BUFFER_SIZE) {}
+			sample_pos = 0;
+
+			// load data
+			myFile.read((void*)&sample[BUFFER_SIZE/2], BUFFER_SIZE/2);
+
+			// led on if took too look
+			//if(sample_pos > 511)
+			//	PORTD |= 16;
+
+			// skip song when button is pressed
+			uint8_t button = (PINB & 1);
+			if(button == 0 && prev_button != 0)
+			{
+				TIMSK0 = 0;	// disable audio interrupt
+
+				for(uint16_t i = 0; i < 50000; i++)	// debounce delay
+				{
+					__asm__ __volatile__ (
+						".rept 10\n\t"
+						"nop\n\t"
+						".endr"
+						:
+						:
+						:
+					);
+				}
+				break;
+			}
+			prev_button = button;
+		}
+
+		TIMSK0 = 0;	// disable audio interrupt
+
+		myFile.close();
+		song++;
 	}
 }
 
